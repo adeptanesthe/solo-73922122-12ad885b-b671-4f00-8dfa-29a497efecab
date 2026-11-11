@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发送证据 · 敏感证据交接</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="card">
+  <p><a href="/">← 返回首页</a></p>
+  <h1>发送证据</h1>
+  <p class="muted">选择不超过 16 MiB 的文件。浏览器先做大小校验，服务端流式落盘；只有上传完整成功才会生成链接。</p>
+
+  <form id="uploadForm">
+    <label class="file-pick">
+      <input type="file" id="fileInput" required>
+    </label>
+    <div id="fileMeta" class="muted"></div>
+    <button class="btn primary" id="uploadBtn" type="submit" disabled>生成 10 分钟有效交接链接</button>
+  </form>
+
+  <div class="progress" id="progressBox" hidden>
+    <div class="bar"><div id="barFill"></div></div>
+    <span id="progressText">0%</span>
+  </div>
+
+  <div id="result" class="result" hidden>
+    <h2>交接链接已生成</h2>
+    <p>请通过可信渠道把链接发给协作方，10 分钟内未领取即自动失效并清理文件。</p>
+    <div class="link-row">
+      <input type="text" id="linkOut" readonly>
+      <button class="btn" id="copyBtn" type="button">复制</button>
+    </div>
+    <p class="muted" id="resultMeta"></p>
+    <p><a class="btn" href="/send">再发送一个</a></p>
+  </div>
+
+  <div id="error" class="error" hidden></div>
+</main>
+<script>
+const MAX = 16 * 1024 * 1024;
+const form = document.getElementById('uploadForm');
+const input = document.getElementById('fileInput');
+const btn = document.getElementById('uploadBtn');
+const meta = document.getElementById('fileMeta');
+const errBox = document.getElementById('error');
+const progressBox = document.getElementById('progressBox');
+const barFill = document.getElementById('barFill');
+const progressText = document.getElementById('progressText');
+
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
+  return (n / 1048576).toFixed(2) + ' MiB';
+}
+function showError(msg) {
+  errBox.textContent = msg;
+  errBox.hidden = false;
+}
+input.addEventListener('change', () => {
+  errBox.hidden = true;
+  const f = input.files[0];
+  if (!f) { btn.disabled = true; meta.textContent = ''; return; }
+  if (f.size > MAX) {
+    btn.disabled = true;
+    meta.textContent = '';
+    showError('文件大小 ' + fmtSize(f.size) + ' 超过 16 MiB 上限，请重新选择。');
+    return;
+  }
+  if (f.size === 0) {
+    btn.disabled = true;
+    showError('不允许上传空文件。');
+    return;
+  }
+  btn.disabled = false;
+  meta.textContent = f.name + ' · ' + fmtSize(f.size);
+});
+
+form.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  errBox.hidden = true;
+  const f = input.files[0];
+  if (!f || f.size > MAX) return;
+
+  const formData = new FormData();
+  formData.append('file', f, f.name);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/handoffs');
+  btn.disabled = true;
+  progressBox.hidden = false;
+  barFill.style.width = '0%';
+  progressText.textContent = '0%';
+
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 100);
+    barFill.style.width = pct + '%';
+    progressText.textContent = pct + '%';
+  };
+  xhr.onload = () => {
+    let payload = null;
+    try { payload = JSON.parse(xhr.responseText); } catch (_) {}
+    if (xhr.status === 200 && payload && payload.ok) {
+      barFill.style.width = '100%';
+      progressText.textContent = '100%';
+      const fullUrl = location.origin + payload.url;
+      document.getElementById('linkOut').value = fullUrl;
+      document.getElementById('resultMeta').textContent =
+        payload.filename + ' · ' + fmtSize(payload.size_bytes) + ' · ' +
+        Math.round(payload.expires_in / 60) + ' 分钟内有效';
+      document.getElementById('result').hidden = false;
+      form.hidden = true;
+      progressBox.hidden = true;
+    } else {
+      btn.disabled = false;
+      showError('上传失败（HTTP ' + xhr.status + '）：' +
+        ((payload && payload.detail) ? payload.detail : '未发布链接，请重试'));
+    }
+  };
+  xhr.onerror = () => {
+    btn.disabled = false;
+    showError('网络错误，上传中断，未发布链接。');
+  };
+  xhr.send(formData);
+});
+
+document.getElementById('copyBtn').addEventListener('click', async () => {
+  const field = document.getElementById('linkOut');
+  try {
+    await navigator.clipboard.writeText(field.value);
+    document.getElementById('copyBtn').textContent = '已复制';
+  } catch (_) {
+    field.select();
+    document.execCommand('copy');
+  }
+});
+</script>
+</body>
+</html>

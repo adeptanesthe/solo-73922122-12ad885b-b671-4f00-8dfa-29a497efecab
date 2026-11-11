@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>接收证据 · 敏感证据交接</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="card">
+  <p><a href="/">← 返回首页</a></p>
+  <h1>接收证据</h1>
+
+  <div id="loading" class="muted">正在核对交接链接…</div>
+
+  <!-- 未领取：打开链接不消耗授权 -->
+  <div id="unclaimed" hidden>
+    <h2 id="uFilename"></h2>
+    <p class="muted" id="uSize"></p>
+    <p>该证据尚未被领取。点击“领取”将把证据绑定到<strong>当前浏览器</strong>的随机 HttpOnly 会话，
+       其他浏览器再打开同一链接将无法领取或下载。</p>
+    <button class="btn primary" id="claimBtn" type="button">领取并绑定本浏览器</button>
+  </div>
+
+  <!-- 已由本浏览器领取：授权随刷新保留 -->
+  <div id="claimed" hidden>
+    <h2 id="cFilename"></h2>
+    <p class="muted" id="cMeta"></p>
+    <p>授权已绑定本浏览器。下载支持单段 HTTP Range，断线后重新下载即可续传；
+       每次打开本页续传窗口都会顺延 10 分钟。</p>
+    <a class="btn primary" id="downloadBtn" href="#">下载证据</a>
+    <button class="btn" id="resumeInfo" type="button" disabled>刷新页面保留授权并顺延有效期</button>
+  </div>
+
+  <div id="error" class="error" hidden></div>
+</main>
+<script>
+const token = location.pathname.split('/').pop();
+const apiBase = '/api/handoffs/' + encodeURIComponent(token);
+const $ = (id) => document.getElementById(id);
+const fmtSize = (n) => n < 1048576
+  ? (n / 1024).toFixed(1) + ' KiB'
+  : (n / 1048576).toFixed(2) + ' MiB';
+
+function showError(msg) {
+  $('loading').hidden = true;
+  $('error').textContent = msg;
+  $('error').hidden = false;
+}
+
+function renderClaimed(data) {
+  $('loading').hidden = true;
+  $('unclaimed').hidden = true;
+  $('claimed').hidden = false;
+  $('cFilename').textContent = data.filename;
+  const mins = Math.round((data.expires_in || 600) / 60);
+  $('cMeta').textContent = fmtSize(data.size_bytes) + ' · 续传窗口约 ' + mins + ' 分钟';
+  $('downloadBtn').href = apiBase + '/download';
+}
+
+function renderUnclaimed(data) {
+  $('loading').hidden = true;
+  $('unclaimed').hidden = false;
+  $('uFilename').textContent = data.filename;
+  $('uSize').textContent = fmtSize(data.size_bytes);
+}
+
+async function refreshStatus() {
+  const resp = await fetch(apiBase + '/status', {credentials: 'same-origin'});
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    showError(body.detail || ('状态查询失败（HTTP ' + resp.status + '）'));
+    return null;
+  }
+  const data = await resp.json();
+  if (data.claimed && data.yours) renderClaimed(data);
+  else renderUnclaimed(data);
+  return data;
+}
+
+$('claimBtn').addEventListener('click', async () => {
+  $('claimBtn').disabled = true;
+  try {
+    const resp = await fetch(apiBase + '/claim', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      $('claimBtn').disabled = false;
+      showError(data.detail || ('领取失败（HTTP ' + resp.status + '）'));
+      return;
+    }
+    await refreshStatus();
+  } catch (e) {
+    $('claimBtn').disabled = false;
+    showError('网络错误，领取未完成，请重试。');
+  }
+});
+
+refreshStatus();
+</script>
+</body>
+</html>
